@@ -58,6 +58,7 @@ public class WorkbenchWindow extends JFrame {
     private final AssetTableModel shaderpacksModel = new AssetTableModel();
     private final LocalJarTableModel localJarsModel = new LocalJarTableModel();
     private final JTabbedPane assetTabs = new JTabbedPane();
+    private JTabbedPane sideTabs;
     private final JTextArea metadataEditor = new JTextArea();
     private final JLabel metadataPathLabel = new JLabel("未选择元数据");
     private Path metadataEditorPath;
@@ -208,7 +209,7 @@ public class WorkbenchWindow extends JFrame {
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         table.setFillsViewportHeight(true);
         table.getSelectionModel().addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting() && table.getSelectedRow() >= 0) {
+            if (isMetadataEditorSelected() && !e.getValueIsAdjusting() && table.getSelectedRow() >= 0) {
                 int modelRow = table.convertRowIndexToModel(table.getSelectedRow());
                 AssetRow row = model.rowAt(modelRow);
                 if (row.metaPath() != null && !row.metaPath().isBlank()) {
@@ -230,8 +231,7 @@ public class WorkbenchWindow extends JFrame {
             table.getColumnModel().getColumn(column).setPreferredWidth(column == 3 ? 90 : 64);
             table.getColumnModel().getColumn(column).setMaxWidth(column == 3 ? 120 : 76);
         }
-        table.getColumnModel().getColumn(2).setCellEditor(new DefaultCellEditor(
-            new JComboBox<>(new String[]{"both", "client", "server"})));
+        table.getColumnModel().getColumn(2).setCellEditor(new SideCellEditor());
         model.onSideChanged = (row, side) -> updateRowSide(row, side);
         table.setComponentPopupMenu(assetMenu(table, model));
         table.addMouseListener(new MouseAdapter() {
@@ -334,13 +334,14 @@ public class WorkbenchWindow extends JFrame {
     }
 
     private JComponent buildSidePanel() {
-        var tabs = new JTabbedPane();
-        tabs.addTab("编辑", buildMetadataEditorPanel());
-        tabs.addTab("添加", buildAddPanel());
-        tabs.addTab("同步/导出", buildExportPanel());
-        tabs.addTab("新建 Pack", buildInitPanel());
-        tabs.setPreferredSize(new Dimension(390, 500));
-        return tabs;
+        sideTabs = new JTabbedPane();
+        sideTabs.addTab("编辑", buildMetadataEditorPanel());
+        sideTabs.addTab("添加", buildAddPanel());
+        sideTabs.addTab("同步/导出", buildExportPanel());
+        sideTabs.addTab("新建 Pack", buildInitPanel());
+        sideTabs.setSelectedIndex(1);
+        sideTabs.setPreferredSize(new Dimension(390, 500));
+        return sideTabs;
     }
 
     private JComponent buildMetadataEditorPanel() {
@@ -367,6 +368,10 @@ public class WorkbenchWindow extends JFrame {
             metadataEditorPath = path;
             metadataPathLabel.setText(projectRoot.relativize(path).toString().replace(File.separatorChar, '/'));
         } catch (Exception e) { Log.warn("读取元数据失败: " + e.getMessage()); }
+    }
+
+    private boolean isMetadataEditorSelected() {
+        return sideTabs != null && sideTabs.getSelectedIndex() == 0;
     }
 
     private void saveMetadataEditor() {
@@ -664,6 +669,10 @@ public class WorkbenchWindow extends JFrame {
 
     private void openProject(Path root) {
         projectRoot = root.toAbsolutePath().normalize();
+        if (sideTabs != null) sideTabs.setSelectedIndex(1);
+        metadataEditorPath = null;
+        metadataEditor.setText("");
+        metadataPathLabel.setText("未选择元数据");
         try {
             InstallerConfig.ensureConfigDir(projectRoot);
         } catch (Exception e) {
@@ -859,6 +868,7 @@ public class WorkbenchWindow extends JFrame {
 
     private void updateRowSide(AssetRow row, String side) {
         if (row == null || row.metaPath() == null || row.metaPath().isBlank()) return;
+        if (side.equalsIgnoreCase(row.side())) return;
         runBackground("修改 Side", () -> {
             ModMetadataEditor.setSide(projectRoot.resolve(row.metaPath()), side);
             new IndexRefresher(repository).refreshAndWrite();
@@ -1395,6 +1405,20 @@ public class WorkbenchWindow extends JFrame {
 
         AssetRow rowAt(int row) {
             return rows.get(row);
+        }
+    }
+
+    private static final class SideCellEditor extends DefaultCellEditor {
+        SideCellEditor() {
+            super(new JComboBox<>(new String[]{"both", "client", "server"}));
+        }
+
+        @Override
+        public Component getTableCellEditorComponent(JTable table, Object value, boolean selected,
+                                                       int row, int column) {
+            Component component = super.getTableCellEditorComponent(table, value, selected, row, column);
+            if (component instanceof JComboBox<?> combo) combo.setSelectedItem(value);
+            return component;
         }
     }
 
