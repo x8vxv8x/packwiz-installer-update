@@ -25,6 +25,7 @@ import javax.swing.*;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.AbstractTableModel;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableRowSorter;
 import java.awt.*;
 import java.awt.event.WindowAdapter;
@@ -57,6 +58,9 @@ public class WorkbenchWindow extends JFrame {
     private final AssetTableModel shaderpacksModel = new AssetTableModel();
     private final LocalJarTableModel localJarsModel = new LocalJarTableModel();
     private final JTabbedPane assetTabs = new JTabbedPane();
+    private final JTextArea metadataEditor = new JTextArea();
+    private final JLabel metadataPathLabel = new JLabel("未选择元数据");
+    private Path metadataEditorPath;
     private JTable modsTable;
     private JTable resourcepacksTable;
     private JTable shaderpacksTable;
@@ -76,8 +80,8 @@ public class WorkbenchWindow extends JFrame {
     private final JCheckBox addDefaultBox = new JCheckBox("默认启用", true);
     private final JTextArea resolvedPreview = new JTextArea(8, 24);
 
-    private final JComboBox<String> syncSideBox = new JComboBox<>(new String[]{"client", "server", "both"});
-    private final JComboBox<String> exportSideBox = new JComboBox<>(new String[]{"client", "server", "both"});
+    private final JComboBox<String> syncSideBox = new JComboBox<>(new String[]{"both", "client", "server"});
+    private final JComboBox<String> exportSideBox = new JComboBox<>(new String[]{"both", "client", "server"});
     private final JTextField exportProjectField = new JTextField("0");
     private final JTextField exportPathField = new JTextField();
 
@@ -203,12 +207,32 @@ public class WorkbenchWindow extends JFrame {
         table.setRowHeight(28);
         table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         table.setFillsViewportHeight(true);
+        table.getSelectionModel().addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting() && table.getSelectedRow() >= 0) {
+                int modelRow = table.convertRowIndexToModel(table.getSelectedRow());
+                AssetRow row = model.rowAt(modelRow);
+                if (row.metaPath() != null && !row.metaPath().isBlank()) {
+                    loadMetadataEditor(projectRoot.resolve(row.metaPath()));
+                }
+            }
+        });
+        table.getColumnModel().getColumn(0).setPreferredWidth(220);
+        table.getColumnModel().getColumn(1).setPreferredWidth(260);
+        table.getColumnModel().getColumn(3).setCellRenderer(new DefaultTableCellRenderer() {
+            @Override public void setValue(Object value) {
+                if (value instanceof Number n) setText(n.longValue() < 0 ? "?" : LocalJarRow.humanSize(n.longValue()));
+                else setText(value == null ? "" : value.toString());
+            }
+        });
         table.putClientProperty(FlatClientProperties.STYLE, "showHorizontalLines: true; showVerticalLines: false");
         for (int column : List.of(2, 3, 4, 5)) {
             table.getColumnModel().getColumn(column).setMinWidth(56);
             table.getColumnModel().getColumn(column).setPreferredWidth(column == 3 ? 90 : 64);
             table.getColumnModel().getColumn(column).setMaxWidth(column == 3 ? 120 : 76);
         }
+        table.getColumnModel().getColumn(2).setCellEditor(new DefaultCellEditor(
+            new JComboBox<>(new String[]{"both", "client", "server"})));
+        model.onSideChanged = (row, side) -> updateRowSide(row, side);
         table.setComponentPopupMenu(assetMenu(table, model));
         table.addMouseListener(new MouseAdapter() {
             @Override
@@ -311,11 +335,50 @@ public class WorkbenchWindow extends JFrame {
 
     private JComponent buildSidePanel() {
         var tabs = new JTabbedPane();
+        tabs.addTab("编辑", buildMetadataEditorPanel());
         tabs.addTab("添加", buildAddPanel());
         tabs.addTab("同步/导出", buildExportPanel());
         tabs.addTab("新建 Pack", buildInitPanel());
         tabs.setPreferredSize(new Dimension(390, 500));
         return tabs;
+    }
+
+    private JComponent buildMetadataEditorPanel() {
+        metadataEditor.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
+        JButton reload = new JButton("重新加载");
+        reload.addActionListener(e -> loadMetadataEditor(metadataEditorPath));
+        JButton save = new JButton("保存");
+        save.addActionListener(e -> saveMetadataEditor());
+        JPanel top = new JPanel(new BorderLayout(8, 4));
+        top.add(metadataPathLabel, BorderLayout.CENTER);
+        top.add(buttonLine(reload, save), BorderLayout.EAST);
+        JPanel panel = new JPanel(new BorderLayout(6, 6));
+        panel.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(new JScrollPane(metadataEditor), BorderLayout.CENTER);
+        return panel;
+    }
+
+    private void loadMetadataEditor(Path path) {
+        if (path == null || !Files.isRegularFile(path)) return;
+        try {
+            metadataEditor.setText(Files.readString(path));
+            metadataEditor.setCaretPosition(0);
+            metadataEditorPath = path;
+            metadataPathLabel.setText(projectRoot.relativize(path).toString().replace(File.separatorChar, '/'));
+        } catch (Exception e) { Log.warn("读取元数据失败: " + e.getMessage()); }
+    }
+
+    private void saveMetadataEditor() {
+        if (metadataEditorPath == null) return;
+        try {
+            Files.writeString(metadataEditorPath, metadataEditor.getText());
+            new IndexRefresher(repository).refreshAndWrite();
+            reloadProject();
+            Log.info("已保存元数据: " + metadataPathLabel.getText());
+        } catch (Exception e) {
+            JOptionPane.showMessageDialog(this, "保存失败:\n" + e.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private JComponent buildAddPanel() {
@@ -341,6 +404,18 @@ public class WorkbenchWindow extends JFrame {
 
     private JComponent buildExportPanel() {
         var panel = formPanel();
+        syncSideBox.addActionListener(e -> {
+            if (config != null) {
+                config.setSyncSide(String.valueOf(syncSideBox.getSelectedItem()));
+                config.save(projectRoot);
+            }
+        });
+        exportSideBox.addActionListener(e -> {
+            if (config != null) {
+                config.setExportSide(String.valueOf(exportSideBox.getSelectedItem()));
+                config.save(projectRoot);
+            }
+        });
         addRow(panel, "同步端", syncSideBox);
         JButton sync = new JButton("下载同步");
         sync.addActionListener(e -> startSync());
@@ -596,6 +671,8 @@ public class WorkbenchWindow extends JFrame {
         }
         config = InstallerConfig.load(projectRoot);
         repository = new PackRepository(projectRoot);
+        syncSideBox.setSelectedItem(config.getSyncSide());
+        exportSideBox.setSelectedItem(config.getExportSide());
         compatJarTabNameField.setText(config.getCompatJarTabName());
         compatJarFolderField.setText(config.getCompatJarFolder());
         projectField.setText(projectRoot.toString());
@@ -778,6 +855,15 @@ public class WorkbenchWindow extends JFrame {
             });
         }
         modsFilterSummary.setText("显示 " + modsTable.getRowCount() + " / " + modsModel.getRowCount());
+    }
+
+    private void updateRowSide(AssetRow row, String side) {
+        if (row == null || row.metaPath() == null || row.metaPath().isBlank()) return;
+        runBackground("修改 Side", () -> {
+            ModMetadataEditor.setSide(projectRoot.resolve(row.metaPath()), side);
+            new IndexRefresher(repository).refreshAndWrite();
+            SwingUtilities.invokeLater(this::reloadProject);
+        });
     }
 
     private static String normalizeSearchKey(String text) {
@@ -1169,7 +1255,8 @@ public class WorkbenchWindow extends JFrame {
     private void startSync() {
         config.setPackUrl(projectRoot.resolve("pack.toml").toString());
         config.setInstallFolder(projectRoot.toString());
-        config.setSide(String.valueOf(syncSideBox.getSelectedItem()));
+        config.setSyncSide(String.valueOf(syncSideBox.getSelectedItem()));
+        config.setSide(config.getSyncSide());
         config.setSyncMode(InstallerConfig.SyncMode.CONFIGURED_FILES);
         config.save(projectRoot);
         runBackground("同步检查", () -> {
@@ -1201,6 +1288,8 @@ public class WorkbenchWindow extends JFrame {
     }
 
     private void exportCurseForge() {
+        config.setExportSide(String.valueOf(exportSideBox.getSelectedItem()));
+        config.save(projectRoot);
         runBackground("导出 CurseForge", () -> {
             int projectId = parseInt(exportProjectField.getText().trim(), 0);
             repository.setCurseForgeProjectId(projectId);
@@ -1274,6 +1363,7 @@ public class WorkbenchWindow extends JFrame {
     private static class AssetTableModel extends AbstractTableModel {
         private final String[] columns = {"名称", "路径", "Side", "大小", "状态", "锁定"};
         private List<AssetRow> rows = List.of();
+        private java.util.function.BiConsumer<AssetRow, String> onSideChanged;
 
         void setRows(List<AssetRow> rows) {
             this.rows = rows;
@@ -1283,17 +1373,24 @@ public class WorkbenchWindow extends JFrame {
         @Override public int getRowCount() { return rows.size(); }
         @Override public int getColumnCount() { return columns.length; }
         @Override public String getColumnName(int column) { return columns[column]; }
+        @Override public Class<?> getColumnClass(int columnIndex) { return columnIndex == 3 ? Long.class : String.class; }
+        @Override public boolean isCellEditable(int rowIndex, int columnIndex) {
+            return columnIndex == 2 && rows.get(rowIndex).metaPath() != null && !rows.get(rowIndex).metaPath().isBlank();
+        }
         @Override public Object getValueAt(int rowIndex, int columnIndex) {
             AssetRow row = rows.get(rowIndex);
             return switch (columnIndex) {
                 case 0 -> row.name();
                 case 1 -> row.actualPath() == null || row.actualPath().isBlank() ? row.path() : row.actualPath();
                 case 2 -> row.side();
-                case 3 -> row.size();
+                case 3 -> row.sizeBytes();
                 case 4 -> row.status();
                 case 5 -> row.curseForge() ? (row.locked() ? "锁定" : "未锁") : "-";
                 default -> "";
             };
+        }
+        @Override public void setValueAt(Object value, int rowIndex, int columnIndex) {
+            if (columnIndex == 2 && value != null && onSideChanged != null) onSideChanged.accept(rows.get(rowIndex), value.toString());
         }
 
         AssetRow rowAt(int row) {
@@ -1501,7 +1598,7 @@ public class WorkbenchWindow extends JFrame {
 
     private record AssetRow(String type, String name, String path, String side, boolean locked,
                             String metaPath, IndexFile.FileEntry entry, boolean curseForge,
-                            String status, String size, String actualPath, Path actualFile,
+                            String status, String size, long sizeBytes, String actualPath, Path actualFile,
                             boolean disabled, Path toggleTarget) {
         static AssetRow from(IndexFile.FileEntry entry, link.infra.packwiz.installer.target.path.PackwizFilePath root,
                              Path projectRoot) {
@@ -1513,7 +1610,7 @@ public class WorkbenchWindow extends JFrame {
             String side = mod != null && mod.side != null ? mod.side.name().toLowerCase(Locale.ROOT) : "both";
             LocalState local = LocalState.from(projectRoot, path);
             return new AssetRow(typeFor(path), entry.getName(), path, side, locked, metaPath, entry, curseForge,
-                local.status(), local.size(), local.actualPath(), local.actualFile(), local.disabled(), local.toggleTarget());
+                local.status(), local.size(), local.sizeBytes(), local.actualPath(), local.actualFile(), local.disabled(), local.toggleTarget());
         }
 
         private static String typeFor(String path) {
@@ -1524,12 +1621,12 @@ public class WorkbenchWindow extends JFrame {
         }
     }
 
-    private record LocalState(String status, String size, String actualPath, Path actualFile,
+    private record LocalState(String status, String size, long sizeBytes, String actualPath, Path actualFile,
                               boolean disabled, Path toggleTarget) {
         static LocalState from(Path projectRoot, String relPath) {
             String normalized = normalizeRelativePath(relPath);
             if (normalized == null || normalized.isBlank()) {
-                return new LocalState("缺失", "", "", null, false, null);
+                return new LocalState("缺失", "", -1L, "", null, false, null);
             }
             Path enabled = projectRoot.resolve(normalized.replace('/', File.separatorChar)).toAbsolutePath().normalize();
             Path disabledPath = projectRoot.resolve(appendDisabledSuffix(normalized).replace('/', File.separatorChar)).toAbsolutePath().normalize();
@@ -1542,7 +1639,7 @@ public class WorkbenchWindow extends JFrame {
                 disabled = true;
             }
             if (actual == null) {
-                return new LocalState("缺失", "", "", null, false, null);
+                return new LocalState("缺失", "", -1L, "", null, false, null);
             }
             Path toggleTarget = null;
             if (isDirectModsJarPath(normalized)) {
@@ -1551,7 +1648,9 @@ public class WorkbenchWindow extends JFrame {
             String actualPath = actual.startsWith(projectRoot)
                 ? projectRoot.relativize(actual).toString().replace(File.separatorChar, '/')
                 : actual.toString();
-            return new LocalState(disabled ? "禁用" : "启用", humanSize(actual), actualPath, actual, disabled, toggleTarget);
+            long sizeBytes;
+            try { sizeBytes = Files.size(actual); } catch (Exception e) { sizeBytes = -1L; }
+            return new LocalState(disabled ? "禁用" : "启用", humanSize(actual), sizeBytes, actualPath, actual, disabled, toggleTarget);
         }
 
         private static String humanSize(Path path) {

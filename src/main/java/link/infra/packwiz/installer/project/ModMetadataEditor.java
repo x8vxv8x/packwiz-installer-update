@@ -7,6 +7,25 @@ import java.nio.file.Path;
 import java.util.List;
 
 public class ModMetadataEditor {
+    public static void setSide(Path metaFile, String side) throws IOException {
+        if (!("both".equals(side) || "client".equals(side) || "server".equals(side))) {
+            throw new IllegalArgumentException("无效 Side: " + side);
+        }
+        List<String> lines = Files.readAllLines(metaFile, StandardCharsets.UTF_8);
+        StringBuilder out = new StringBuilder();
+        boolean wrote = false;
+        for (String line : lines) {
+            if (line.trim().startsWith("side")) {
+                out.append("side = \"").append(side).append("\"\n");
+                wrote = true;
+            } else {
+                out.append(line).append('\n');
+            }
+        }
+        if (!wrote) out.insert(0, "side = \"" + side + "\"\n");
+        Files.writeString(metaFile, out.toString(), StandardCharsets.UTF_8);
+    }
+
     public static void setPinned(Path metaFile, boolean pinned) throws IOException {
         List<String> lines = Files.readAllLines(metaFile, StandardCharsets.UTF_8);
         StringBuilder out = new StringBuilder();

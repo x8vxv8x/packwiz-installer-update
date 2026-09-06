@@ -54,7 +54,9 @@ public class InstallerConfig {
     }
 
     private String packUrl = "";
-    private String side = "client";
+    private String side = "both";
+    private String syncSide = "both";
+    private String exportSide = "both";
     private String installFolder = ".";
     private String metaFile = MANIFEST_FILE_NAME;
     private String multimcFolder = "";
@@ -137,7 +139,7 @@ public class InstallerConfig {
             Toml pack = toml.getTable("pack");
             if (pack != null) {
                 config.packUrl = pack.getString("url", "");
-                config.side = pack.getString("side", "client");
+                config.side = pack.getString("side", "both");
             }
 
             Toml install = toml.getTable("install");
@@ -175,6 +177,8 @@ public class InstallerConfig {
 
             Toml workbench = toml.getTable("workbench");
             if (workbench != null) {
+                config.syncSide = workbench.getString("sync-side", "both");
+                config.exportSide = workbench.getString("export-side", "both");
                 Toml compatJars = workbench.getTable("compat-jars");
                 if (compatJars != null) {
                     config.compatJarTabName = compatJars.getString("name", "本地 Jars");
@@ -211,7 +215,10 @@ public class InstallerConfig {
 
         sb.append("[sync]\n");
         sb.append("mode = \"").append(syncMode.configValue()).append("\"\n");
-        sb.append("\n[workbench.compat-jars]\n");
+        sb.append("[workbench]\n");
+        sb.append("sync-side = \"").append(escapeToml(syncSide)).append("\"\n");
+        sb.append("export-side = \"").append(escapeToml(exportSide)).append("\"\n\n");
+        sb.append("[workbench.compat-jars]\n");
         sb.append("name = \"").append(escapeToml(compatJarTabName)).append("\"\n");
         sb.append("folder = \"").append(escapeToml(compatJarFolder)).append("\"\n");
 
@@ -333,6 +340,11 @@ public class InstallerConfig {
     public String getSide() { return side; }
     public void setSide(String side) { this.side = side; }
 
+    public String getSyncSide() { return syncSide; }
+    public void setSyncSide(String side) { this.syncSide = normalizeSide(side); }
+    public String getExportSide() { return exportSide; }
+    public void setExportSide(String side) { this.exportSide = normalizeSide(side); }
+
     public String getInstallFolder() { return installFolder; }
     public void setInstallFolder(String installFolder) { this.installFolder = installFolder; }
 
@@ -380,5 +392,11 @@ public class InstallerConfig {
     private static String escapeToml(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static String normalizeSide(String side) {
+        if (side == null) return "both";
+        String value = side.toLowerCase();
+        return value.equals("client") || value.equals("server") || value.equals("both") ? value : "both";
     }
 }
