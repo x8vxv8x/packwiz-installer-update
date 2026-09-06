@@ -333,12 +333,20 @@ public class SyncManager {
                         String destPath = relativeDestPath(failure.entry(), packFolder);
                         ModChange failedChange = removeTaskByDestPath(downloadTasks, destPath);
                         if (failedChange != null) {
-                            result.failed.add(new ModChange(
-                                failedChange.name, failedChange.destPath, failure.url(), failedChange.hash,
-                                failedChange.changeType, failure.exception().getMessage(), "", ""
-                            ));
+                            boolean acceptedExisting = tryAcceptManualExisting(
+                                failure.entry(), failedChange, manifest, indexFile, packFolder);
+                            if (acceptedExisting) {
+                                addSuccessfulChange(result, failedChange);
+                                Log.info("跳过手动下载，文件已存在: " + failedChange.destPath);
+                            } else {
+                                result.failed.add(new ModChange(
+                                    failedChange.name, failedChange.destPath, failure.url(), failedChange.hash,
+                                    failedChange.changeType, failure.exception().getMessage(), "", ""
+                                ));
+                            }
                             completed++;
-                            if (progressCallback != null) progressCallback.accept(completed, "需手动下载: " + failedChange.name);
+                            if (progressCallback != null) progressCallback.accept(completed,
+                                acceptedExisting ? "跳过: " + failedChange.name : "需手动下载: " + failedChange.name);
                         }
                     }
                 }
@@ -812,6 +820,31 @@ public class SyncManager {
             return true;
         } catch (Exception e) {
             Log.warn("检查本地文件失败，将继续同步: " + change.destPath + " - " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** 接受 CurseForge API 排除项的本地手动下载文件，并写入 manifest。 */
+    private boolean tryAcceptManualExisting(IndexFile.FileEntry entry, ModChange change,
+                                            ManifestFile manifest, IndexFile indexFile,
+                                            PackwizFilePath packFolder) {
+        try {
+            if (entry == null || change == null || !isDirectModsJar(change.destPath)) return false;
+            Path enabled = resolveInsidePack(packFolder, enabledPath(change.destPath));
+            Path disabled = resolveInsidePack(packFolder, disabledPath(change.destPath));
+            Path actual = Files.exists(enabled) ? enabled : disabled;
+            if (!Files.exists(actual) || !Files.isRegularFile(actual)) return false;
+
+            ExpectedHash expected = expectedDownloadHash(entry, indexFile);
+            if (expected.hash() != null && !expected.hash().isBlank()) {
+                Hash<?> actualHash = hashLocalFile(actual, expected.format());
+                if (!expected.format().fromString(expected.hash()).equals(actualHash)) return false;
+            }
+            putManifestEntry(manifest, entry, indexFile, packFolder, change.destPath,
+                relativePath(packFolder, actual));
+            return true;
+        } catch (Exception e) {
+            Log.warn("检查手动下载文件失败: " + change.destPath + " - " + e.getMessage());
             return false;
         }
     }
